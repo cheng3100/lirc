@@ -31,10 +31,10 @@ Then connect a irc client to the server.
 | Command       | Parameter             |                                     |
 | ------------- | --------------------- | ----------------------------------- |
 | /quit         |                       | Leave the chatroom                  |
-| /topic        | [chatname]             | Set the chatroom topic              |
-| /nick         | [nickname]            | Change nickname                     |
-| /msg          | [uid]                 | Enter private mode          |
-| /com          |                       | Enter common mode
+| /rname        | [chatname]            | Set the chatroom name               |
+| /uname        | [nickname]            | Change user name                    |
+| /msg          | [uid]                 | Enter private mode                  |
+| /com          |                       | Enter common mode					  |
 | /list         |                       | Show active clients                 |
 | /help         |                       | Show this help                      |
 
