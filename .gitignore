@@ -24,3 +24,8 @@
 
 # vim swp
 *.swp
+
+# tag file
+tags
+server
+client

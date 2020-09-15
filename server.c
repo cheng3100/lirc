@@ -3,8 +3,11 @@
 #define MAX_CLIENTS 100
 #define BUFFER_SZ 2048
 
+#define INV_UID 0		// reserve for invalid uid
+#define START_UID 10    // 1~9 reserve for funture usage
+
 static _Atomic unsigned int cli_count = 0;
-static int uid = 10;
+static int uid = START_UID;
 
 typedef enum {
 	COMMON,
@@ -13,12 +16,12 @@ typedef enum {
 
 /* Client structure */
 typedef struct {
-	struct sockaddr_in addr; /* Client remote address */
-	int connfd;	 /* Connection file descriptor */
-	int uid;	 /* Client unique identifier */
-	int status;	 /* common/private */
+	struct sockaddr_in addr;	/* Client remote address */
+	int connfd;					/* Connection file descriptor */
+	int uid;					/* Client unique identifier */
+	int status;					/* common/private */
 	int peer;
-	char name[32];	 /* Client name */
+	char name[32];				/* Client name */
 } client_t;
 
 client_t *clients[MAX_CLIENTS];
@@ -28,6 +31,7 @@ pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char topic[BUFFER_SZ/2];
 
 pthread_mutex_t topic_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 
 /* The 'strdup' function is not available in the C standard  */
 char *_strdup(const char *s) {
@@ -140,7 +144,7 @@ void send_active_clients(int connfd){
 	pthread_mutex_lock(&clients_mutex);
 	for (int i = 0; i < MAX_CLIENTS; ++i){
 		if (clients[i]) {
-			sprintf(s, "<< [%d] %s\r\n", clients[i]->uid, clients[i]->name);
+			sprintf(s, "[%d] %s\r\n", clients[i]->uid, clients[i]->name);
 			send_message_self(s, connfd);
 		}
 	}
@@ -179,18 +183,18 @@ void *handle_client(void *arg){
 	print_client_addr(cli->addr);
 	printf(" referenced by %d\n", cli->uid);
 
-	sprintf(buff_out, "<< %s has joined\r\n", cli->name);
+	sprintf(buff_out, "%s has joined\r\n", cli->name);
 	send_message_all(buff_out);
 
 	pthread_mutex_lock(&topic_mutex);
 	if (strlen(topic)) {
 		buff_out[0] = '\0';
-		sprintf(buff_out, "<< topic: %s\r\n", topic);
+		sprintf(buff_out, "topic: %s\r\n", topic);
 		send_message_self(buff_out, cli->connfd);
 	}
 	pthread_mutex_unlock(&topic_mutex);
 
-	send_message_self("<< see /help for assistance\r\n", cli->connfd);
+	send_message_self("see /help for assistance\r\n", cli->connfd);
 
 	/* Receive input from client */
 	while ((rlen = recv(cli->connfd, buff_in, sizeof(buff_in) - 1, 0)) > 0) {
@@ -220,10 +224,10 @@ void *handle_client(void *arg){
 						param = strtok(NULL, " ");
 					}
 					pthread_mutex_unlock(&topic_mutex);
-					sprintf(buff_out, "<< topic changed to: %s \r\n", topic);
+					sprintf(buff_out, "topic changed to: %s \r\n", topic);
 					send_message_all(buff_out);
 				} else {
-					send_message_self("<< message cannot be null\r\n", cli->connfd);
+					send_message_self("message cannot be null\r\n", cli->connfd);
 				}
 			} else if (!strcmp(command, "/nick")) {
 				param = strtok(NULL, " ");
@@ -235,11 +239,11 @@ void *handle_client(void *arg){
 					}
 					strncpy(cli->name, param, sizeof(cli->name));
 					cli->name[sizeof(cli->name)-1] = '\0';
-					sprintf(buff_out, "<< %s is now known as %s\r\n", old_name, cli->name);
+					sprintf(buff_out, "%s is now known as %s\r\n", old_name, cli->name);
 					free(old_name);
 					send_message_all(buff_out);
 				} else {
-					send_message_self("<< name cannot be null\r\n", cli->connfd);
+					send_message_self("name cannot be null\r\n", cli->connfd);
 				}
 			} else if (!strcmp(command, "/msg")) {
 				param = strtok(NULL, " ");
@@ -248,6 +252,9 @@ void *handle_client(void *arg){
 					cli->status = PRIVATE;
 					cli->peer = uid;
 					set_peer(uid, cli->uid, PRIVATE);
+					send_message_self("start private talk!\n", cli->connfd);
+					sprintf(buff_out, "user %s invite you to join talk!\n", cli->name);
+					send_message_client(buff_out, cli->peer);
 					/** param = strtok(NULL, " "); */
 					/** if (param) { */
 					/**	 sprintf(buff_out, "[PM][%s]", cli->name); */
@@ -259,29 +266,33 @@ void *handle_client(void *arg){
 					/**	 strcat(buff_out, "\r\n"); */
 					/**	 send_message_client(buff_out, uid); */
 					/** } else { */
-					/**	 send_message_self("<< message cannot be null\r\n", cli->connfd); */
+					/**	 send_message_self("message cannot be null\r\n", cli->connfd); */
 					/** } */
 				} else {
-					send_message_self("<< reference cannot be null\r\n", cli->connfd);
+					send_message_self("reference cannot be null\r\n", cli->connfd);
 				}
 			} else if(!strcmp(command, "/list")) {
-				sprintf(buff_out, "<< clients %d\r\n", cli_count);
+				sprintf(buff_out, "clients %d\r\n", cli_count);
 				send_message_self(buff_out, cli->connfd);
 				send_active_clients(cli->connfd);
 			} else if (!strcmp(command, "/help")) {
-				strcat(buff_out, "<< /quit	 Quit chatroom\r\n");
-				strcat(buff_out, "<< /topic	<message> Set chat topic\r\n");
-				strcat(buff_out, "<< /nick	 <name> Change nickname\r\n");
-				strcat(buff_out, "<< /msg	  <peer uid> Enter private mode\r\n");
-				strcat(buff_out, "<< /com				 Enter public mode\r\n");
-				strcat(buff_out, "<< /list	 Show active clients\r\n");
-				strcat(buff_out, "<< /help	 Show help\r\n");
+				strcat(buff_out, "\n/quit	 Quit chatroom\r\n");
+				strcat(buff_out, "/topic	<message> Set chat topic\r\n");
+				strcat(buff_out, "/nick	 <name> Change nickname\r\n");
+				strcat(buff_out, "/msg	  <peer uid> Enter private mode\r\n");
+				strcat(buff_out, "/com	 Enter public mode\r\n");
+				strcat(buff_out, "/list	 Show active clients\r\n");
+				strcat(buff_out, "/help	 Show help\r\n");
 				send_message_self(buff_out, cli->connfd);
 			} else if (!strcmp(command, "/com")) {
+				int peer_id = cli->peer;
 				cli->status = COMMON;
-				set_peer(cli->uid, cli->peer, COMMON);
+				cli->peer = INV_UID;
+				set_peer(peer_id, INV_UID, COMMON);
+				send_message_self("end private talk!\n", cli->connfd);
+				send_message_client("end private talk!\n", peer_id);
 			} else {
-				send_message_self("<< unknown command\r\n", cli->connfd);
+				send_message_self("unknown command\r\n", cli->connfd);
 			}
 		} else {
 			/* Send message */
@@ -294,13 +305,13 @@ void *handle_client(void *arg){
 	}
 
 	/* Close connection */
-	sprintf(buff_out, "<< %s has left\r\n", cli->name);
+	sprintf(buff_out, "%s has left\r\n", cli->name);
 	send_message_all(buff_out);
 	close(cli->connfd);
 
 	/* Delete client from queue and yield thread */
 	queue_delete(cli->uid);
-	printf("<< quit ");
+	printf("quit ");
 	print_client_addr(cli->addr);
 	printf(" referenced by %d\n", cli->uid);
 	free(cli);
@@ -316,11 +327,15 @@ int main(int argc, char *argv[]){
 	struct sockaddr_in cli_addr;
 	pthread_t tid;
 
+	if (argc != 2) {
+		perro("args");
+	}
+
 	/* Socket settings */
 	listenfd = socket(AF_INET, SOCK_STREAM, 0);
 	serv_addr.sin_family = AF_INET;
 	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-	serv_addr.sin_port = htons(5000);
+	serv_addr.sin_port = htons(atoi(argv[1]));
 
 	/* Ignore pipe signals */
 	/** signal(SIGPIPE, SIG_IGN); */
@@ -358,6 +373,7 @@ int main(int argc, char *argv[]){
 		client_t *cli = (client_t *)malloc(sizeof(client_t));
 		cli->addr = cli_addr;
 		cli->connfd = connfd;
+		uid = uid ==INV_UID?START_UID:uid;
 		cli->uid = uid++;
 		sprintf(cli->name, "%d", cli->uid);
 
