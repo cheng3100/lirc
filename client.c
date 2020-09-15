@@ -8,68 +8,10 @@
 #define END_STRING "/end\n"
 #define WORD_COUNT "/wc\n"
 
-enum tlv_type {
-	MESSAGE,
-	COMMAND,
-};
-
-enum cmd_opcode {
-	HELP,
-	PRIMODE,
-	COMMODE,
-	LIST,
-	UNAME,
-	RNAME,
-	QUIT,
-};
-
-const char *op_cmd[] = {
-[HELP]		"/help",
-[PRIMODE]	"/msg",
-[COMMODE]	"/com",
-[LIST]		"/list",
-[UNAME]		"/uname",
-[RNAME]		"/rname",
-[QUIT]		"/quit",
-};
-
-typedef struct {
-	int t;
-	int l;
-	union {
-		uint8_t u8;
-		uint16_t u16;
-		uint32_t u32;
-		uint8_t	 *str;
-		void	*tlv;
-	} v;
-} tlv_t;
-
-enum tlv_value_type_e {
-	V_U8,
-	V_U16,
-	V_U32,
-	V_STR,
-	V_BUF,
-};
-
 struct wcount_t {
 	sem_t mutex;
 	int   count;
 } *wc;
-
-int tlv_serial_append(uint8_t *buf, int v_type, tlv_t *tlv ) {
-
-	buf[0] = tlv->t;
-	buf[1] = tlv->l;
-	memcpy(buf + 2, tlv->v.str, tlv->l);
-
-	return tlv->l + 2;	// t\l is fixed to 2 byte
-}
-
-int tlv_parse(uint8_t *buf, int vtype, tlv_t *tlv ) {
-	return 0;
-}
 
 int packet_constrcut(uint8_t *pbuf, uint8_t* mbuf, int mlen) {
 	int offset = 0;
@@ -81,7 +23,7 @@ int packet_constrcut(uint8_t *pbuf, uint8_t* mbuf, int mlen) {
 	}
 
 	tlv.l = mlen;
-	tlv.v.str = mbuf;
+	tlv.v.str = (char *)mbuf;
 
 	offset = tlv_serial_append(pbuf, V_STR, &tlv);
 
@@ -124,16 +66,21 @@ void receive(int sock) {
 	int filled = 0, msg_byte=0;
 	while((filled = recv(sock, buf, MAX_MSG_LENGTH-1, 0))) {
 		buf[filled] = '\0';
-		tlv_t tlv;
-		tlv_parse(buf, V_STR, &tlv);
-		switch (tlv.t) {
-			case MESSAGE :
-				printf("\33[2K\r>>> %s", tlv.v.str);
-				msg_byte = tlv.l;
-				break;
-			case COMMAND:  break;  //reserve
-			default: break;   // reserve
-		}
+		/** tlv_t tlv; */
+		/** tlv_parse(buf, V_STR, &tlv); */
+		/** printf("\33[2K\r>>> %s", buf+2); */
+		/** printf(">>> %s", buf+2); */
+		/** switch (tlv.t) { */
+		/**     case MESSAGE : */
+		/**         printf("\33[2K\r>>> %s", tlv.v.str); */
+		/**         msg_byte = tlv.l; */
+		/**         break; */
+		/**     case COMMAND:  break;  //reserve */
+		/**     default: break;   // reserve */
+		/**     printf("erro\n"); */
+		/** } */
+        /**  */
+		printf("\33[2K\r>>> %s", buf);
 
 		sem_wait(&wc->mutex);
 		wc->count += msg_byte;

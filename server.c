@@ -71,10 +71,15 @@ void queue_delete(int uid){
 
 /* Send message to all clients but the sender */
 void send_message(char *s, int uid){
+	/** uint8_t pack_buf[512]; */
+	/** int len; */
+    /**  */
+	/** len = tlv_serial_append_str(pack_buf, s); */
 	pthread_mutex_lock(&clients_mutex);
 	for (int i = 0; i < MAX_CLIENTS; ++i) {
 		if (clients[i]) {
 			if (clients[i]->uid != uid) {
+				/** if (send(clients[i]->connfd, pack_buf, len, 0) < 0) { */
 				if (send(clients[i]->connfd, s, strlen(s), 0) < 0) {
 					perro("Write to descriptor failed");
 					break;
@@ -87,9 +92,14 @@ void send_message(char *s, int uid){
 
 /* Send message to all clients */
 void send_message_all(char *s){
-	pthread_mutex_lock(&clients_mutex);
+	/** uint8_t pack_buf[512]; */
+	/** int len; */
+    /**  */
+	/** len = tlv_serial_append_str(pack_buf, s); */
+	/** pthread_mutex_lock(&clients_mutex); */
 	for (int i = 0; i <MAX_CLIENTS; ++i){
 		if (clients[i]) {
+			/** if (send(clients[i]->connfd, pack_buf, len, 0) < 0) { */
 			if (send(clients[i]->connfd, s, strlen(s), 0) < 0) {
 				perro("Write to descriptor failed");
 				break;
@@ -100,7 +110,13 @@ void send_message_all(char *s){
 }
 
 /* Send message to sender */
-void send_message_self(const char *s, int connfd){
+void send_message_self(char *s, int connfd){
+	/** uint8_t pack_buf[512]; */
+	/** int len; */
+    /**  */
+	/** len = tlv_serial_append_str(pack_buf, s); */
+
+	/** if (send(connfd, pack_buf, len, 0) < 0) { */
 	if (send(connfd, s, strlen(s), 0) < 0) {
 		perro("Write to descriptor failed");
 		exit(-1);
@@ -123,10 +139,15 @@ void  set_peer(int uid, int peer, int status) {
 }
 /* Send message to client */
 void send_message_client(char *s, int uid){
+	/** uint8_t pack_buf[512]; */
+	/** int len; */
+    /**  */
+	/** len = tlv_serial_append_str(pack_buf, s); */
 	pthread_mutex_lock(&clients_mutex);
 	for (int i = 0; i < MAX_CLIENTS; ++i){
 		if (clients[i]) {
 			if (clients[i]->uid == uid) {
+				/** if (send(clients[i]->connfd, pack_buf, len, 0)<0) { */
 				if (send(clients[i]->connfd, s, strlen(s), 0)<0) {
 					perro("Write to descriptor failed");
 					break;
@@ -144,7 +165,7 @@ void send_active_clients(int connfd){
 	pthread_mutex_lock(&clients_mutex);
 	for (int i = 0; i < MAX_CLIENTS; ++i){
 		if (clients[i]) {
-			sprintf(s, "[%d] %s\r\n", clients[i]->uid, clients[i]->name);
+			sprintf(s, "uid: [%d] name:%s\r\n", clients[i]->uid, clients[i]->name);
 			send_message_self(s, connfd);
 		}
 	}
@@ -170,8 +191,85 @@ void print_client_addr(struct sockaddr_in addr){
 			(addr.sin_addr.s_addr & 0xff000000) >> 24);
 }
 
+int serve_cmd_process(char *buff_out, char *buff_in, client_t *cli) {
+	char *command, *param;
+	command = strtok(buff_in," ");
+	if (!strcmp(command, "/quit")) {
+		return 1;			// disconnect
+	} else if (!strcmp(command, op_cmd[RNAME])) {
+		param = strtok(NULL, " ");
+		if (param) {
+			pthread_mutex_lock(&topic_mutex);
+			topic[0] = '\0';
+			while (param != NULL) {
+				strcat(topic, param);
+				strcat(topic, " ");
+				param = strtok(NULL, " ");
+			}
+			pthread_mutex_unlock(&topic_mutex);
+			sprintf(buff_out, "topic changed to: %s \r\n", topic);
+			send_message_all(buff_out);
+		} else {
+			send_message_self("message cannot be null\r\n", cli->connfd);
+		}
+	} else if (!strcmp(command, op_cmd[UNAME])) {
+		param = strtok(NULL, " ");
+		if (param) {
+			char *old_name = _strdup(cli->name);
+			if (!old_name) {
+				perro("Cannot allocate memory");
+				return 2;
+			}
+			strncpy(cli->name, param, sizeof(cli->name));
+			cli->name[sizeof(cli->name)-1] = '\0';
+			sprintf(buff_out, "%s is now known as %s\r\n", old_name, cli->name);
+			free(old_name);
+			send_message_all(buff_out);
+		} else {
+			send_message_self("name cannot be null\r\n", cli->connfd);
+		}
+	} else if (!strcmp(command, op_cmd[PRIMODE])) {
+		param = strtok(NULL, " ");
+		if (param) {
+			int uid = atoi(param);
+			cli->status = PRIVATE;
+			cli->peer = uid;
+			set_peer(uid, cli->uid, PRIVATE);
+			send_message_self("start private talk!\n", cli->connfd);
+			sprintf(buff_out, "user %s invite you to join talk!\n", cli->name);
+			send_message_client(buff_out, cli->peer);
+		} else {
+			send_message_self("reference cannot be null\r\n", cli->connfd);
+		}
+	} else if(!strcmp(command, op_cmd[LIST])) {
+		sprintf(buff_out, "your id: %d\nclient num: %d\r\n", cli->uid, cli_count);
+		send_message_self(buff_out, cli->connfd);
+		send_active_clients(cli->connfd);
+	} else if (!strcmp(command, op_cmd[HELP])) {
+		strcat(buff_out, "\n/quit	 Quit chatroom\r\n");
+		strcat(buff_out, "/rname <message> Set chat room name\r\n");
+		strcat(buff_out, "/uname <name> Change username\r\n");
+		strcat(buff_out, "/msg	  <peer uid> Enter private mode\r\n");
+		strcat(buff_out, "/com	 Enter public mode\r\n");
+		strcat(buff_out, "/list	 Show active clients\r\n");
+		strcat(buff_out, "/help	 Show help\r\n");
+		send_message_self(buff_out, cli->connfd);
+	} else if (!strcmp(command, op_cmd[COMMODE])) {
+		int peer_id = cli->peer;
+		cli->status = COMMON;
+		cli->peer = INV_UID;
+		set_peer(peer_id, INV_UID, COMMON);
+		send_message_self("end private talk!\n", cli->connfd);
+		send_message_client("end private talk!\n", peer_id);
+	} else {
+		send_message_self("unknown command\r\n", cli->connfd);
+	}
+
+	return 0;
+}
+
 /* Handle all communication with the client */
-void *handle_client(void *arg){
+void *handle_client(void *arg) {
 	char buff_out[BUFFER_SZ];
 	char buff_in[BUFFER_SZ / 2];
 	int rlen;
@@ -202,108 +300,133 @@ void *handle_client(void *arg){
 		buff_out[0] = '\0';
 		strip_newline(buff_in);
 
-		/* Ignore empty buffer */
-		if (!strlen(buff_in)) {
-			continue;
-		}
-
-		/* Special options */
-		if (buff_in[0] == '/') {
-			char *command, *param;
-			command = strtok(buff_in," ");
-			if (!strcmp(command, "/quit")) {
+		tlv_t tlv;
+		tlv_parse((uint8_t*)buff_in, V_STR, &tlv);
+		switch (tlv.t) {
+			int ret;
+			case COMMAND: {
+				printf("send cmd\n");
+				ret = serve_cmd_process(buff_out, tlv.v.str, cli);
+				if (1 == ret) {  // /quit
+					goto DISCONNECT;
+				} else if (2 == ret) {
+					continue;		// cmd fail
+				}
 				break;
-			} else if (!strcmp(command, "/topic")) {
-				param = strtok(NULL, " ");
-				if (param) {
-					pthread_mutex_lock(&topic_mutex);
-					topic[0] = '\0';
-					while (param != NULL) {
-						strcat(topic, param);
-						strcat(topic, " ");
-						param = strtok(NULL, " ");
-					}
-					pthread_mutex_unlock(&topic_mutex);
-					sprintf(buff_out, "topic changed to: %s \r\n", topic);
-					send_message_all(buff_out);
-				} else {
-					send_message_self("message cannot be null\r\n", cli->connfd);
-				}
-			} else if (!strcmp(command, "/nick")) {
-				param = strtok(NULL, " ");
-				if (param) {
-					char *old_name = _strdup(cli->name);
-					if (!old_name) {
-						perro("Cannot allocate memory");
-						continue;
-					}
-					strncpy(cli->name, param, sizeof(cli->name));
-					cli->name[sizeof(cli->name)-1] = '\0';
-					sprintf(buff_out, "%s is now known as %s\r\n", old_name, cli->name);
-					free(old_name);
-					send_message_all(buff_out);
-				} else {
-					send_message_self("name cannot be null\r\n", cli->connfd);
-				}
-			} else if (!strcmp(command, "/msg")) {
-				param = strtok(NULL, " ");
-				if (param) {
-					int uid = atoi(param);
-					cli->status = PRIVATE;
-					cli->peer = uid;
-					set_peer(uid, cli->uid, PRIVATE);
-					send_message_self("start private talk!\n", cli->connfd);
-					sprintf(buff_out, "user %s invite you to join talk!\n", cli->name);
-					send_message_client(buff_out, cli->peer);
-					/** param = strtok(NULL, " "); */
-					/** if (param) { */
-					/**	 sprintf(buff_out, "[PM][%s]", cli->name); */
-					/**	 while (param != NULL) { */
-					/**		 strcat(buff_out, " "); */
-					/**		 strcat(buff_out, param); */
-					/**		 param = strtok(NULL, " "); */
-					/**	 } */
-					/**	 strcat(buff_out, "\r\n"); */
-					/**	 send_message_client(buff_out, uid); */
-					/** } else { */
-					/**	 send_message_self("message cannot be null\r\n", cli->connfd); */
-					/** } */
-				} else {
-					send_message_self("reference cannot be null\r\n", cli->connfd);
-				}
-			} else if(!strcmp(command, "/list")) {
-				sprintf(buff_out, "clients %d\r\n", cli_count);
-				send_message_self(buff_out, cli->connfd);
-				send_active_clients(cli->connfd);
-			} else if (!strcmp(command, "/help")) {
-				strcat(buff_out, "\n/quit	 Quit chatroom\r\n");
-				strcat(buff_out, "/topic	<message> Set chat topic\r\n");
-				strcat(buff_out, "/nick	 <name> Change nickname\r\n");
-				strcat(buff_out, "/msg	  <peer uid> Enter private mode\r\n");
-				strcat(buff_out, "/com	 Enter public mode\r\n");
-				strcat(buff_out, "/list	 Show active clients\r\n");
-				strcat(buff_out, "/help	 Show help\r\n");
-				send_message_self(buff_out, cli->connfd);
-			} else if (!strcmp(command, "/com")) {
-				int peer_id = cli->peer;
-				cli->status = COMMON;
-				cli->peer = INV_UID;
-				set_peer(peer_id, INV_UID, COMMON);
-				send_message_self("end private talk!\n", cli->connfd);
-				send_message_client("end private talk!\n", peer_id);
-			} else {
-				send_message_self("unknown command\r\n", cli->connfd);
 			}
-		} else {
-			/* Send message */
-			snprintf(buff_out, sizeof(buff_out), "[%s] %s\r\n", cli->name, buff_in);
-			if (PRIVATE == cli->status) {
-				send_message_client(buff_out, cli->peer);
-			} else
-				send_message(buff_out, cli->uid);
+			case MESSAGE: {
+				snprintf(buff_out, sizeof(buff_out), "[%s] %s\r\n", cli->name, tlv.v.str);
+				if (PRIVATE == cli->status) {
+					send_message_client(buff_out, cli->peer);
+					printf("private send from %d to %d\n", cli->uid, cli->peer);
+
+				} else {
+					send_message(buff_out, cli->uid);
+					printf("com send from %d\n", cli->uid);
+				}
+				break;
+			}
+			default:
+			send_message_self("unkonw message\r\n", cli->connfd);
+			break;
 		}
+		/** if (buff_in[0] == '/') { */
+		/**     char *command, *param; */
+		/**     command = strtok(buff_in," "); */
+		/**     if (!strcmp(command, "/quit")) { */
+		/**         break; */
+		/**     } else if (!strcmp(command, "/topic")) { */
+		/**         param = strtok(NULL, " "); */
+		/**         if (param) { */
+		/**             pthread_mutex_lock(&topic_mutex); */
+		/**             topic[0] = '\0'; */
+		/**             while (param != NULL) { */
+		/**                 strcat(topic, param); */
+		/**                 strcat(topic, " "); */
+		/**                 param = strtok(NULL, " "); */
+		/**             } */
+		/**             pthread_mutex_unlock(&topic_mutex); */
+		/**             sprintf(buff_out, "topic changed to: %s \r\n", topic); */
+		/**             send_message_all(buff_out); */
+		/**         } else { */
+		/**             send_message_self("message cannot be null\r\n", cli->connfd); */
+		/**         } */
+		/**     } else if (!strcmp(command, "/nick")) { */
+		/**         param = strtok(NULL, " "); */
+		/**         if (param) { */
+		/**             char *old_name = _strdup(cli->name); */
+		/**             if (!old_name) { */
+		/**                 perro("Cannot allocate memory"); */
+		/**                 continue; */
+		/**             } */
+		/**             strncpy(cli->name, param, sizeof(cli->name)); */
+		/**             cli->name[sizeof(cli->name)-1] = '\0'; */
+		/**             sprintf(buff_out, "%s is now known as %s\r\n", old_name, cli->name); */
+		/**             free(old_name); */
+		/**             send_message_all(buff_out); */
+		/**         } else { */
+		/**             send_message_self("name cannot be null\r\n", cli->connfd); */
+		/**         } */
+		/**     } else if (!strcmp(command, "/msg")) { */
+		/**         param = strtok(NULL, " "); */
+		/**         if (param) { */
+		/**             int uid = atoi(param); */
+		/**             cli->status = PRIVATE; */
+		/**             cli->peer = uid; */
+		/**             set_peer(uid, cli->uid, PRIVATE); */
+		/**             send_message_self("start private talk!\n", cli->connfd); */
+		/**             sprintf(buff_out, "user %s invite you to join talk!\n", cli->name); */
+		/**             send_message_client(buff_out, cli->peer); */
+		/**             [> param = strtok(NULL, " "); <] */
+		/**             [> if (param) { <] */
+		/**             [>	 sprintf(buff_out, "[PM][%s]", cli->name); <] */
+		/**             [>	 while (param != NULL) { <] */
+		/**             [>		 strcat(buff_out, " "); <] */
+		/**             [>		 strcat(buff_out, param); <] */
+		/**             [>		 param = strtok(NULL, " "); <] */
+		/**             [>	 } <] */
+		/**             [>	 strcat(buff_out, "\r\n"); <] */
+		/**             [>	 send_message_client(buff_out, uid); <] */
+		/**             [> } else { <] */
+		/**             [>	 send_message_self("message cannot be null\r\n", cli->connfd); <] */
+		/**             [> } <] */
+		/**         } else { */
+		/**             send_message_self("reference cannot be null\r\n", cli->connfd); */
+		/**         } */
+		/**     } else if(!strcmp(command, "/list")) { */
+		/**         sprintf(buff_out, "clients %d\r\n", cli_count); */
+		/**         send_message_self(buff_out, cli->connfd); */
+		/**         send_active_clients(cli->connfd); */
+		/**     } else if (!strcmp(command, "/help")) { */
+		/**         strcat(buff_out, "\n/quit	 Quit chatroom\r\n"); */
+		/**         strcat(buff_out, "/topic	<message> Set chat topic\r\n"); */
+		/**         strcat(buff_out, "/nick	 <name> Change nickname\r\n"); */
+		/**         strcat(buff_out, "/msg	  <peer uid> Enter private mode\r\n"); */
+		/**         strcat(buff_out, "/com	 Enter public mode\r\n"); */
+		/**         strcat(buff_out, "/list	 Show active clients\r\n"); */
+		/**         strcat(buff_out, "/help	 Show help\r\n"); */
+		/**         send_message_self(buff_out, cli->connfd); */
+		/**     } else if (!strcmp(command, "/com")) { */
+		/**         int peer_id = cli->peer; */
+		/**         cli->status = COMMON; */
+		/**         cli->peer = INV_UID; */
+		/**         set_peer(peer_id, INV_UID, COMMON); */
+		/**         send_message_self("end private talk!\n", cli->connfd); */
+		/**         send_message_client("end private talk!\n", peer_id); */
+		/**     } else { */
+		/**         send_message_self("unknown command\r\n", cli->connfd); */
+		/**     } */
+		/** } else { */
+		/**     / Send message / */
+		/**     snprintf(buff_out, sizeof(buff_out), "[%s] %s\r\n", cli->name, buff_in); */
+		/**     if (PRIVATE == cli->status) { */
+		/**         send_message_client(buff_out, cli->peer); */
+		/**     } else */
+		/**         send_message(buff_out, cli->uid); */
+		/** } */
 	}
 
+DISCONNECT:
 	/* Close connection */
 	sprintf(buff_out, "%s has left\r\n", cli->name);
 	send_message_all(buff_out);
