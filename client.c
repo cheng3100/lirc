@@ -66,21 +66,21 @@ void receive(int sock) {
 	int filled = 0, msg_byte=0;
 	while((filled = recv(sock, buf, MAX_MSG_LENGTH-1, 0))) {
 		buf[filled] = '\0';
-		/** tlv_t tlv; */
-		/** tlv_parse(buf, V_STR, &tlv); */
+		tlv_t tlv;
+		tlv_parse(buf, V_STR, &tlv);
 		/** printf("\33[2K\r>>> %s", buf+2); */
 		/** printf(">>> %s", buf+2); */
-		/** switch (tlv.t) { */
-		/**     case MESSAGE : */
-		/**         printf("\33[2K\r>>> %s", tlv.v.str); */
-		/**         msg_byte = tlv.l; */
-		/**         break; */
-		/**     case COMMAND:  break;  //reserve */
-		/**     default: break;   // reserve */
-		/**     printf("erro\n"); */
-		/** } */
-        /**  */
-		printf("\33[2K\r>>> %s", buf);
+		switch (tlv.t) {
+			case MESSAGE :
+				printf("\33[2K\r>>> %s", tlv.v.str);
+				msg_byte = tlv.l;
+				break;
+			case COMMAND:  break;  //reserve
+			default: break;   // reserve
+			printf("erro\n");
+		}
+
+		/** printf("\33[2K\r>>> %s", buf); */
 
 		sem_wait(&wc->mutex);
 		wc->count += msg_byte;
