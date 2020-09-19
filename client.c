@@ -13,34 +13,46 @@ struct wcount_t {
 	int   count;
 } *wc;
 
-int packet_constrcut(uint8_t *pbuf, uint8_t* mbuf, int mlen) {
+int packet_constrcut(uint8_t *pbuf, uint8_t* mbuf, int mlen)
+{
 	int offset = 0;
-	tlv_t tlv;
+	tlv_t *tlv;
+
+	if (!(tlv = malloc(sizeof(tlv_t) + mlen)))
+		perro("malloc fail");
+
+
 	if (mbuf[0] == '/') {    // command
-		tlv.t = COMMAND;
+		tlv->t = COMMAND;
 	} else {
-		tlv.t = MESSAGE;
+		tlv->t = MESSAGE;
 	}
 
-	tlv.l = mlen;
-	tlv.v.str = (char *)mbuf;
+	tlv->l = mlen;
+	memcpy(tlv->v, mbuf, mlen);
 
-	offset = tlv_serial_append(pbuf, V_STR, &tlv);
+	offset = tlv_serial_append(pbuf, tlv);
+
+	free(tlv);
 
 	return offset;
 }
 
-void send_cmd(int sock, int pid) {
+void send_cmd(int sock, int pid)
+{
 	char str[MAX_MSG_LENGTH] = {0};
 	uint8_t packet[MAX_PACKET_LENGTH] = {0};
 	uint32_t len;
 
 	while (fgets(str, MAX_MSG_LENGTH, stdin) == str) {
-		/** stdout print format: */
-		/**         1. "\033[A" : move cursor up one line but in same column. */
-		/**         2. "\33[2K" : erases the entire line your cursor is currently on. */
+		str[MAX_MSG_LENGTH-1] = '\0';
+		/*
+		 * stdout print format:
+		 * 1. "\033[A" : move cursor up one line but in same column.
+		 * 2. "\33[2K" : erases the entire line your cursor is currently on.
+		 */
 		printf("\033[A\33[2K\r<<< %s", str);
-		/** local cmd */
+		/* local cmd */
 		if(strncmp(str, END_STRING, strlen(END_STRING)) == 0)
 			break;
 		else if (strncmp(str, WORD_COUNT, strlen(WORD_COUNT)) == 0) {
@@ -49,22 +61,24 @@ void send_cmd(int sock, int pid) {
 		}
 
 		len = packet_constrcut(packet, (uint8_t*)str, strlen(str));
-		/** if(send(sock, str, strlen(str)+1, 0) < 0) perro("send"); */
 		if(send(sock, packet, len, 0) < 0) perro("send");
 
 		sem_wait(&wc->mutex);
 		wc->count += strlen(str);
 		sem_post(&wc->mutex);
 	}
+	// TODO exit fix
 	kill(pid, SIGKILL);
 	printf("Goodbye.\n");
 	exit(EXIT_SUCCESS);
 }
 
-void receive(int sock) {
+void receive(int sock)
+{
 	uint8_t buf[MAX_MSG_LENGTH] = {0};
 	int filled = 0, msg_byte=0;
 	while((filled = recv(sock, buf, MAX_MSG_LENGTH-1, 0))) {
+		/* reserve:server to client cmd */
 		buf[filled] = '\0';
 		printf("\33[2K\r>>> %s", buf);
 
@@ -78,18 +92,23 @@ void receive(int sock) {
 	exit(EXIT_SUCCESS);
 }
 
-int main(int argc, char **argv) {
-	if(argc < 2 || argc > 3) perro("args");
+int main(int argc, char **argv)
+{
+	if(argc < 3 || argc > 3)
+		perro("args");
 
-	int sock = socket(AF_INET, SOCK_STREAM, 0);
+	int sock = socket(PF_INET, SOCK_STREAM, 0);
 	if(sock == -1) perro("socket");
 
 	struct in_addr server_addr;
-	if(!inet_pton(AF_INET, argv[1], &server_addr)) perro("inet_pton");
+	if(!inet_pton(AF_INET, argv[1], &server_addr))
+		perro("inet_pton");
 
 	struct sockaddr_in connection;
 	connection.sin_family = AF_INET;
 	memcpy(&connection.sin_addr, &server_addr, sizeof(server_addr));
+	// TODO
+	/** memcpy_s(&connection.sin_addr, sizeof(connection.sin_addr), &server_addr, sizeof(server_addr)); */
 	connection.sin_port = htons(atoi(argv[2]));
 	if (connect(sock, (const struct sockaddr*) &connection, sizeof(connection)) != 0) perro("connect");
 

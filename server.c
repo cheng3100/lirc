@@ -3,48 +3,152 @@
 #define MAX_CLIENTS 100
 #define BUFFER_SZ 2048
 
-#define INV_UID 0		// reserve for invalid uid
-#define START_UID 10    // 1~9 reserve for funture usage
+#define INV_UID 0           /* reserve for invalid uid */
+#define START_UID 10        /* 1~9 reserve for funture usage */
+#define MAX_UID (MAX_CLIENTS + START_UID)
 
-static _Atomic unsigned int cli_count = 0;
-static int uid = START_UID;
+#define UNAME_SZ   32
 
-typedef enum {
+enum chat_status {
 	COMMON,
 	PRIVATE,
 } chatStatus_e;
 
 /* Client structure */
 typedef struct {
-	struct sockaddr_in addr;	/* Client remote address */
-	int connfd;					/* Connection file descriptor */
-	int uid;					/* Client unique identifier */
-	int status;					/* common/private */
+	struct sockaddr_in addr;       /* Client remote address */
+	int connfd;                    /* Connection file descriptor */
+	int uid;                       /* Client unique identifier */
+	int status;                    /* common/private */
 	int peer;
-	char name[32];				/* Client name */
+	char name[UNAME_SZ];                 /* Client name */
 } client_t;
+
+typedef uint32_t usd_t;
+typedef uint32_t use_t;
+
+#define USD_SZ ((1<<8) * 4)
+#define USE_SZ ((1<<8) * 4)
+/* get the uid set's directory index */
+#define UDX(uid)  (((uid) >> 8) & 0xff)
+/* get the uid set's entry index */
+#define UTX(uid)  (uid & 0xff)
+
+/* uid set entry flag */
+#define USE_P  (1 << 16)     /* present */
 
 client_t *clients[MAX_CLIENTS];
 
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static char topic[BUFFER_SZ/2];
+static char rname[BUFFER_SZ/2];
 
-pthread_mutex_t topic_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t rname_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+static _Atomic unsigned int cli_count = 0;
+static int uid = START_UID;
+static usd_t *usd;
 
-/* The 'strdup' function is not available in the C standard  */
-char *_strdup(const char *s) {
-	size_t size = strlen(s) + 1;
-	char *p = malloc(size);
-	if (p) {
-		memcpy(p, s, size);
-	}
-	return p;
+/*
+ * a two level hash set
+ *
+ * uid is divided 3 part:
+ * usd(uid set directory), use(uid set entry), reserve(for uid)/flag(for hash set entry)
+ *
+ * usd: The low 8 bit of uid. It is used as a directory index.
+ * use: The next 8 bit of uid. It is used as a entry index of a directory.
+ * reserve/flag: Reserve for uid itself but used as flag area for hash set entry.
+ * Only P(present) flag is used for now.
+ *
+ * set and unset's time complexity is O(1)
+ * The minimal memory usage is 2K, max is 257K.
+ *
+ * |<-MSB
+ * ++++++++++++++++++++++++++++++++++++++++
+ * |   flag   ... |P|    usd    |  use    |
+ * ++++++++++++++++++++++++++++++++++++++++
+ *                  ^           ^         ^
+ * | 16bit          |   8bit    |  8bit   |
+ */
+int us_init(usd_t **usd)
+{
+	if (!usd)
+		return -1;
+	*usd = malloc(USD_SZ);
+	memset(*usd, 0, USD_SZ);
+
+	return 0;
 }
 
+int us_set(usd_t *ud, uint32_t uid, int create)
+{
+	usd_t *d;
+
+	if (!ud)
+		return -1;
+
+	d = (usd_t *)(uintptr_t)ud[UDX(uid)];
+	if (d) {
+		use_t *e = &d[UTX(uid)];
+		if (*e & USE_P)
+			return 1;	/* duplicate uid */
+
+		*e = *e | USE_P;
+	} else if (create) {
+		d = malloc(USE_SZ);
+		if (!d)
+			return -1;
+
+		ud[UDX(uid)] = (uintptr_t)d;
+		memset(d, 0, USE_SZ);
+
+		d[UTX(uid)] |= USE_P;
+	}
+
+	return 0;         /* no duplicate and set */
+}
+
+int us_unset(usd_t *ud, uint32_t uid)
+{
+	usd_t *d;
+	use_t *e;
+
+	if (!ud)
+		return -1;
+
+	d = (usd_t *)(uintptr_t)ud[UDX(uid)];
+	if (!d)
+		return -1;
+
+	e = &d[UTX(uid)];
+	if (*e & USE_P)
+		return -1;
+
+	*e &= ~USE_P;
+
+	return 0;
+}
+
+int us_deinit(usd_t *usd)
+{
+	if (!usd)
+		return -1;
+
+	for (int i=0; i<USD_SZ; i++) {
+		if (!usd[i])
+			continue;
+		free((usd_t *)(uintptr_t)usd[i]);
+	}
+
+	free(usd);
+
+	return 0;
+}
+
+
 /* Add client to queue */
-void queue_add(client_t *cl){
+void queue_add(client_t *cl)
+{
 	pthread_mutex_lock(&clients_mutex);
 	for (int i = 0; i < MAX_CLIENTS; ++i) {
 		if (!clients[i]) {
@@ -56,7 +160,8 @@ void queue_add(client_t *cl){
 }
 
 /* Delete client from queue */
-void queue_delete(int uid){
+void queue_delete(int uid)
+{
 	pthread_mutex_lock(&clients_mutex);
 	for (int i = 0; i < MAX_CLIENTS; ++i) {
 		if (clients[i]) {
@@ -69,7 +174,8 @@ void queue_delete(int uid){
 	pthread_mutex_unlock(&clients_mutex);
 }
 
-void send_message(char *s, int uid){
+void send_message(char *s, int uid)
+{
 	pthread_mutex_lock(&clients_mutex);
 	for (int i = 0; i < MAX_CLIENTS; ++i) {
 		if (clients[i]) {
@@ -85,7 +191,9 @@ void send_message(char *s, int uid){
 }
 
 /* Send message to all clients */
-void send_message_all(char *s){
+void send_message_all(char *s)
+{
+	pthread_mutex_lock(&clients_mutex);
 	for (int i = 0; i <MAX_CLIENTS; ++i){
 		if (clients[i]) {
 			if (send(clients[i]->connfd, s, strlen(s), 0) < 0) {
@@ -98,14 +206,16 @@ void send_message_all(char *s){
 }
 
 /* Send message to sender */
-void send_message_self(char *s, int connfd){
+void send_message_self(char *s, int connfd)
+{
 	if (send(connfd, s, strlen(s), 0) < 0) {
 		perro("Write to descriptor failed");
 		exit(-1);
 	}
 }
 
-void  set_peer(int uid, int peer, int status) {
+void  set_peer(int uid, int peer, int status)
+{
 	pthread_mutex_lock(&clients_mutex);
 	for (int i = 0; i < MAX_CLIENTS; ++i){
 		if (clients[i]) {
@@ -120,7 +230,8 @@ void  set_peer(int uid, int peer, int status) {
 	return;
 }
 /* Send message to client */
-void send_message_client(char *s, int uid){
+void send_message_client(char *s, int uid)
+{
 	pthread_mutex_lock(&clients_mutex);
 	for (int i = 0; i < MAX_CLIENTS; ++i){
 		if (clients[i]) {
@@ -136,13 +247,14 @@ void send_message_client(char *s, int uid){
 }
 
 /* Send list of active clients */
-void send_active_clients(int connfd){
+void send_active_clients(int connfd)
+{
 	char s[64];
 
 	pthread_mutex_lock(&clients_mutex);
 	for (int i = 0; i < MAX_CLIENTS; ++i){
 		if (clients[i]) {
-			sprintf(s, "uid: [%d] name:%s\r\n", clients[i]->uid, clients[i]->name);
+			snprintf(s, 63, "uid: [%d] name:%s\r\n", clients[i]->uid, clients[i]->name);
 			send_message_self(s, connfd);
 		}
 	}
@@ -150,7 +262,8 @@ void send_active_clients(int connfd){
 }
 
 /* Strip CRLF */
-void strip_newline(char *s){
+void strip_newline(char *s)
+{
 	while (*s != '\0') {
 		if (*s == '\r' || *s == '\n') {
 			*s = '\0';
@@ -160,7 +273,8 @@ void strip_newline(char *s){
 }
 
 /* Print ip address */
-void print_client_addr(struct sockaddr_in addr){
+void print_client_addr(struct sockaddr_in addr)
+{
 	printf("%d.%d.%d.%d",
 			addr.sin_addr.s_addr & 0xff,
 			(addr.sin_addr.s_addr & 0xff00) >> 8,
@@ -168,70 +282,80 @@ void print_client_addr(struct sockaddr_in addr){
 			(addr.sin_addr.s_addr & 0xff000000) >> 24);
 }
 
-int serve_cmd_process(char *buff_out, char *buff_in, client_t *cli) {
+int serve_cmd_process(char *buff_out, int obuf_size, char *buff_in, client_t *cli)
+{
 	char *command, *param;
-	command = strtok(buff_in," ");
-	if (!strcmp(command, "/quit")) {
-		return 1;			// disconnect
-	} else if (!strcmp(command, op_cmd[RNAME])) {
-		param = strtok(NULL, " ");
+	char *save_str;
+	command = strtok_r(buff_in," ", &save_str);
+	if (!strncmp(command, op_cmd[QUIT], strlen(op_cmd[QUIT]))) {
+		return 1;					/* disconnect */
+	} else if (!strncmp(command, op_cmd[RNAME], strlen(op_cmd[RNAME]))) {
+		param = strtok_r(NULL, " ", &save_str);
 		if (param) {
-			pthread_mutex_lock(&topic_mutex);
-			topic[0] = '\0';
+			pthread_mutex_lock(&rname_mutex);
+			rname[0] = '\0';
 			while (param != NULL) {
-				strcat(topic, param);
-				strcat(topic, " ");
-				param = strtok(NULL, " ");
+				strncat(rname, param, strlen(param));
+				strncat(rname, " ", 1);
+				param = strtok_r(NULL, " ", &save_str);
 			}
-			pthread_mutex_unlock(&topic_mutex);
-			sprintf(buff_out, "topic changed to: %s \r\n", topic);
+			pthread_mutex_unlock(&rname_mutex);
+			snprintf(buff_out, obuf_size - 1, "room name changed to: %s \r\n", rname);
 			send_message_all(buff_out);
 		} else {
 			send_message_self("message cannot be null\r\n", cli->connfd);
 		}
-	} else if (!strcmp(command, op_cmd[UNAME])) {
-		param = strtok(NULL, " ");
+	} else if (!strncmp(command, op_cmd[UNAME], strlen(op_cmd[UNAME]))) {
+		param = strtok_r(NULL, " ", &save_str);
 		if (param) {
-			char *old_name = _strdup(cli->name);
+			char *old_name = strndup(cli->name, sizeof(cli->name));
 			if (!old_name) {
 				perro("Cannot allocate memory");
 				return 2;
 			}
+
 			strncpy(cli->name, param, sizeof(cli->name));
 			cli->name[sizeof(cli->name)-1] = '\0';
-			sprintf(buff_out, "%s is now known as %s\r\n", old_name, cli->name);
+			snprintf(buff_out, obuf_size - 1, "%s is now known as %s\r\n", old_name, cli->name);
 			free(old_name);
 			send_message_all(buff_out);
 		} else {
 			send_message_self("name cannot be null\r\n", cli->connfd);
 		}
-	} else if (!strcmp(command, op_cmd[PRIMODE])) {
-		param = strtok(NULL, " ");
+	} else if (!strncmp(command, op_cmd[PRIMODE], strlen(op_cmd[PRIMODE]))) {
+		param = strtok_r(NULL, " ", &save_str);
 		if (param) {
 			int uid = atoi(param);
 			cli->status = PRIVATE;
 			cli->peer = uid;
 			set_peer(uid, cli->uid, PRIVATE);
 			send_message_self("start private talk!\n", cli->connfd);
-			sprintf(buff_out, "user %s invite you to join talk!\n", cli->name);
+			snprintf(buff_out, obuf_size, "user %s invite you to join talk!\n", cli->name);
 			send_message_client(buff_out, cli->peer);
 		} else {
 			send_message_self("reference cannot be null\r\n", cli->connfd);
 		}
-	} else if(!strcmp(command, op_cmd[LIST])) {
-		sprintf(buff_out, "your id: %d\nclient num: %d\r\n", cli->uid, cli_count);
+	} else if(!strncmp(command, op_cmd[LIST], strlen(op_cmd[LIST]))) {
+		snprintf(buff_out, obuf_size, "your id: %d\nclient num: %d\r\n", cli->uid, cli_count);
 		send_message_self(buff_out, cli->connfd);
 		send_active_clients(cli->connfd);
-	} else if (!strcmp(command, op_cmd[HELP])) {
-		strcat(buff_out, "\n/quit	 Quit chatroom\r\n");
-		strcat(buff_out, "/rname <message> Set chat room name\r\n");
-		strcat(buff_out, "/uname <name> Change username\r\n");
-		strcat(buff_out, "/msg	  <peer uid> Enter private mode\r\n");
-		strcat(buff_out, "/com	 Enter public mode\r\n");
-		strcat(buff_out, "/list	 Show active clients\r\n");
-		strcat(buff_out, "/help	 Show help\r\n");
+	} else if (!strncmp(command, op_cmd[HELP], strlen(op_cmd[HELP]))) {
+		strncat(buff_out, "\n/quit	 Quit chatroom\r\n", \
+				strlen("\n/quit	 Quit chatroom\r\n"));
+		strncat(buff_out, "/rname <message> Set chat room name\r\n", \
+				strlen("/rname <message> Set chat room name\r\n"));
+		strncat(buff_out, "/uname <name> Change username\r\n", \
+				strlen("/uname <name> Change username\r\n"));
+		strncat(buff_out, "/msg	  <peer uid> Enter private mode\r\n", \
+				strlen("/msg	  <peer uid> Enter private mode\r\n"));
+		strncat(buff_out, "/com	 Enter public mode\r\n", \
+				strlen("/com	 Enter public mode\r\n"));
+		strncat(buff_out, "/list	 Show active clients\r\n", \
+				strlen("/list	 Show active clients\r\n"));
+		strncat(buff_out, "/help	 Show help\r\n", \
+				strlen("/help	 Show help\r\n"));
 		send_message_self(buff_out, cli->connfd);
-	} else if (!strcmp(command, op_cmd[COMMODE])) {
+	} else if (!strncmp(command, op_cmd[COMMODE], strlen(op_cmd[COMMODE]))) {
 		int peer_id = cli->peer;
 		cli->status = COMMON;
 		cli->peer = INV_UID;
@@ -246,7 +370,8 @@ int serve_cmd_process(char *buff_out, char *buff_in, client_t *cli) {
 }
 
 /* Handle all communication with the client */
-void *handle_client(void *arg) {
+void *handle_client(void *arg)
+{
 	char buff_out[BUFFER_SZ];
 	char buff_in[BUFFER_SZ / 2];
 	int rlen;
@@ -258,32 +383,32 @@ void *handle_client(void *arg) {
 	print_client_addr(cli->addr);
 	printf(" referenced by %d\n", cli->uid);
 
-	sprintf(buff_out, "%s has joined\r\n", cli->name);
+	buff_out[BUFFER_SZ - 1] = '\0';
+	snprintf(buff_out, BUFFER_SZ - 1, "%s has joined\r\n", cli->name);
 	send_message_all(buff_out);
 
-	pthread_mutex_lock(&topic_mutex);
-	if (strlen(topic)) {
+	pthread_mutex_lock(&rname_mutex);
+	if (strlen(rname)) {
 		buff_out[0] = '\0';
-		sprintf(buff_out, "topic: %s\r\n", topic);
+		snprintf(buff_out, BUFFER_SZ - 1, "room name: %s\r\n", rname);
 		send_message_self(buff_out, cli->connfd);
 	}
-	pthread_mutex_unlock(&topic_mutex);
+	pthread_mutex_unlock(&rname_mutex);
 
 	send_message_self("see /help for assistance\r\n", cli->connfd);
 
 	/* Receive input from client */
 	while ((rlen = recv(cli->connfd, buff_in, sizeof(buff_in) - 1, 0)) > 0) {
 		buff_in[rlen] = '\0';
-		buff_out[0] = '\0';
 		strip_newline(buff_in);
 
-		tlv_t tlv;
-		tlv_parse((uint8_t*)buff_in, V_STR, &tlv);
-		switch (tlv.t) {
+		tlv_t *tlv;
+		tlv_parse((uint8_t*)buff_in, &tlv);
+		switch (tlv->t) {
 			int ret;
 			case COMMAND: {
-				printf("send cmd\n");
-				ret = serve_cmd_process(buff_out, tlv.v.str, cli);
+				printf("command send from %s\n", cli->name);
+				ret = serve_cmd_process(buff_out, BUFFER_SZ, (char *)(tlv->v), cli);
 				if (1 == ret) {  // /quit
 					goto DISCONNECT;
 				} else if (2 == ret) {
@@ -292,14 +417,14 @@ void *handle_client(void *arg) {
 				break;
 			}
 			case MESSAGE: {
-				snprintf(buff_out, sizeof(buff_out), "[%s] %s\r\n", cli->name, tlv.v.str);
+				snprintf(buff_out, sizeof(buff_out), "[%s] %s\r\n", cli->name, (char *)(tlv->v));
 				if (PRIVATE == cli->status) {
 					send_message_client(buff_out, cli->peer);
 					printf("private send from %d to %d\n", cli->uid, cli->peer);
 
 				} else {
 					send_message(buff_out, cli->uid);
-					printf("com send from %d\n", cli->uid);
+					printf("public send from %s\n", cli->name);
 				}
 				break;
 			}
@@ -311,15 +436,16 @@ void *handle_client(void *arg) {
 
 DISCONNECT:
 	/* Close connection */
-	sprintf(buff_out, "%s has left\r\n", cli->name);
+	snprintf(buff_out, BUFFER_SZ - 1, "%s has left\r\n", cli->name);
 	send_message_all(buff_out);
 	close(cli->connfd);
 
-	/* Delete client from queue and yield thread */
+	/* Delete client from queue and detach thread */
 	queue_delete(cli->uid);
 	printf("quit ");
 	print_client_addr(cli->addr);
 	printf(" referenced by %d\n", cli->uid);
+	us_unset(usd, cli->uid);
 	free(cli);
 	cli_count--;
 	pthread_detach(pthread_self());
@@ -327,15 +453,15 @@ DISCONNECT:
 	return NULL;
 }
 
-int main(int argc, char *argv[]){
+int main(int argc, char *argv[])
+{
 	int listenfd = 0, connfd = 0;
 	struct sockaddr_in serv_addr;
 	struct sockaddr_in cli_addr;
 	pthread_t tid;
 
-	if (argc != 2) {
+	if (argc != 2)
 		perro("args");
-	}
 
 	/* Socket settings */
 	listenfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -354,6 +480,8 @@ int main(int argc, char *argv[]){
 		perro("Socket listening failed");
 		return EXIT_FAILURE;
 	}
+
+	us_init(&usd);
 
 	printf("<[ SERVER STARTED ]>\n");
 
@@ -376,9 +504,15 @@ int main(int argc, char *argv[]){
 		client_t *cli = (client_t *)malloc(sizeof(client_t));
 		cli->addr = cli_addr;
 		cli->connfd = connfd;
-		uid = uid ==INV_UID?START_UID:uid;
-		cli->uid = uid++;
-		sprintf(cli->name, "%d", cli->uid);
+
+		/* find a nonredundant uid from the uid set */
+		do {
+			uid++;
+			uid = (uid > MAX_UID)?START_UID:uid;
+		} while (us_set(usd, uid, 1));
+
+		cli->uid = uid;
+		snprintf(cli->name, UNAME_SZ, "%d", cli->uid);
 
 		/* Add client to the queue and fork thread */
 		queue_add(cli);
@@ -387,6 +521,10 @@ int main(int argc, char *argv[]){
 		/* Reduce CPU usage */
 		sleep(1);
 	}
+
+	/* Connection over */
+	close(listenfd);
+	us_deinit(usd);
 
 	return EXIT_SUCCESS;
 }
