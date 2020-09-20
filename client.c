@@ -67,7 +67,6 @@ void send_cmd(int sock, int pid)
 		wc->count += strlen(str);
 		sem_post(&wc->mutex);
 	}
-	// TODO exit fix
 	kill(pid, SIGKILL);
 	printf("Goodbye.\n");
 	exit(EXIT_SUCCESS);
@@ -107,8 +106,6 @@ int main(int argc, char **argv)
 	struct sockaddr_in connection;
 	connection.sin_family = AF_INET;
 	memcpy(&connection.sin_addr, &server_addr, sizeof(server_addr));
-	// TODO
-	/** memcpy_s(&connection.sin_addr, sizeof(connection.sin_addr), &server_addr, sizeof(server_addr)); */
 	connection.sin_port = htons(atoi(argv[2]));
 	if (connect(sock, (const struct sockaddr*) &connection, sizeof(connection)) != 0) perro("connect");
 
