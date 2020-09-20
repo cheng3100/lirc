@@ -24,11 +24,12 @@ typedef struct {
 	char name[UNAME_SZ];                 /* Client name */
 } client_t;
 
-typedef uint32_t usd_t;
-typedef uint32_t use_t;
+/* 4byte in 32bit, 8byte in 64bit */
+typedef uintptr_t usd_t;
+typedef uintptr_t use_t;
 
-#define USD_SZ ((1<<8) * 4)
-#define USE_SZ ((1<<8) * 4)
+#define USD_NUM ((1<<8))
+#define USE_NUM ((1<<8))
 /* get the uid set's directory index */
 #define UDX(uid)  (((uid) >> 8) & 0xff)
 /* get the uid set's entry index */
@@ -47,7 +48,7 @@ pthread_mutex_t rname_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static _Atomic unsigned int cli_count = 0;
 static int uid = START_UID;
-static usd_t *usd;
+static usd_t *g_usd;
 
 /*
  * a two level hash set
@@ -74,8 +75,8 @@ int us_init(usd_t **usd)
 {
 	if (!usd)
 		return -1;
-	*usd = malloc(USD_SZ);
-	memset(*usd, 0, USD_SZ);
+	*usd = malloc(USD_NUM * sizeof(usd_t));
+	memset(*usd, 0, USD_NUM * sizeof(usd_t));
 
 	return 0;
 }
@@ -83,26 +84,27 @@ int us_init(usd_t **usd)
 int us_set(usd_t *ud, uint32_t uid, int create)
 {
 	usd_t *d;
+	use_t *e;
 
 	if (!ud)
 		return -1;
 
-	d = (usd_t *)(uintptr_t)ud[UDX(uid)];
+	d = (usd_t *)ud[UDX(uid)];
 	if (d) {
-		use_t *e = &d[UTX(uid)];
+		e = &d[UTX(uid)];
 		if (*e & USE_P)
 			return 1;	/* duplicate uid */
 
 		*e = *e | USE_P;
 	} else if (create) {
-		d = malloc(USE_SZ);
-		if (!d)
+		e = malloc(USE_NUM * sizeof(use_t));
+		if (!e)
 			return -1;
 
-		ud[UDX(uid)] = (uintptr_t)d;
-		memset(d, 0, USE_SZ);
+		ud[UDX(uid)] = (uintptr_t)e;
+		memset(e, 0, USE_NUM * sizeof(use_t));
 
-		d[UTX(uid)] |= USE_P;
+		e[UTX(uid)] |= USE_P;
 	}
 
 	return 0;         /* no duplicate and set */
@@ -116,7 +118,7 @@ int us_unset(usd_t *ud, uint32_t uid)
 	if (!ud)
 		return -1;
 
-	d = (usd_t *)(uintptr_t)ud[UDX(uid)];
+	d = (usd_t *)ud[UDX(uid)];
 	if (!d)
 		return -1;
 
@@ -134,10 +136,10 @@ int us_deinit(usd_t *usd)
 	if (!usd)
 		return -1;
 
-	for (int i=0; i<USD_SZ; i++) {
+	for (int i=0; i<USD_NUM; i++) {
 		if (!usd[i])
 			continue;
-		free((usd_t *)(uintptr_t)usd[i]);
+		free((use_t *)usd[i]);
 	}
 
 	free(usd);
@@ -445,7 +447,7 @@ DISCONNECT:
 	printf("quit ");
 	print_client_addr(cli->addr);
 	printf(" referenced by %d\n", cli->uid);
-	us_unset(usd, cli->uid);
+	us_unset(g_usd, cli->uid);
 	free(cli);
 	cli_count--;
 	pthread_detach(pthread_self());
@@ -481,7 +483,7 @@ int main(int argc, char *argv[])
 		return EXIT_FAILURE;
 	}
 
-	us_init(&usd);
+	us_init(&g_usd);
 
 	printf("<[ SERVER STARTED ]>\n");
 
@@ -509,7 +511,7 @@ int main(int argc, char *argv[])
 		do {
 			uid++;
 			uid = (uid > MAX_UID)?START_UID:uid;
-		} while (us_set(usd, uid, 1));
+		} while (us_set(g_usd, uid, 1));
 
 		cli->uid = uid;
 		snprintf(cli->name, UNAME_SZ, "%d", cli->uid);
@@ -524,7 +526,7 @@ int main(int argc, char *argv[])
 
 	/* Connection over */
 	close(listenfd);
-	us_deinit(usd);
+	us_deinit(g_usd);
 
 	return EXIT_SUCCESS;
 }
