@@ -40,7 +40,6 @@ const char *op_cmd[] = {
 [QUIT]		"/quit",
 };
 
-//TODO:tlv fix
 typedef struct {
 	uint8_t  t;
 	uint16_t l;
@@ -64,17 +63,6 @@ inline int tlv_serial_append(uint8_t *buf, tlv_t *tlv)
 
 	return tlv->l + 3;
 }
-
-// inline int tlv_serial_append_str(uint8_t *buf_out, char *buf_in) {
-//     tlv_t t;
-//     t.t = MESSAGE;
-//     t.l = strlen(buf_in) + 1;   [> include /0 <]
-//     t.v = (void *)buf_in;
-//
-//     tlv_serial_append(buf_out, &t);
-//
-//     return 2 + t.l;
-// }
 
 inline int tlv_parse(uint8_t *buf, tlv_t **tlv)
 {
