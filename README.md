@@ -38,3 +38,4 @@ Then connect a irc client to the server.
 | /list         |                       | Show active clients                 |
 | /help         |                       | Show this help                      |
 
+
