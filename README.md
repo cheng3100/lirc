@@ -1,6 +1,8 @@
 LIRC
 ====
 
+![GNU Make](https://github.com/cheng3100/lirc/workflows/GNU%20Make/badge.svg)
+
 Light IRC room application writed by C. Include a server and client.
 
 ## Build
