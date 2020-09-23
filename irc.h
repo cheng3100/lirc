@@ -12,6 +12,7 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include <signal.h>
+#include "stdint.h"
 
 #define perro(x) {fprintf(stderr, "%s:%d: %s: errno:%d %s\n", __FILE__, __LINE__, x, errno, strerror(errno));exit(1);}
 

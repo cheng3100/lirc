@@ -123,7 +123,7 @@ int us_unset(usd_t *ud, uint32_t uid)
 		return -1;
 
 	e = &d[UTX(uid)];
-	if (*e & USE_P)
+	if (!(*e & USE_P))
 		return -1;
 
 	*e &= ~USE_P;
